@@ -1,0 +1,8 @@
+.venv/
+.vscode/
+__pycache__/
+*.py[cod]
+*.docx
+.env
+.env.*
+!.env.example
