@@ -9,6 +9,7 @@ import math
 import os
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
@@ -17,7 +18,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 from latex2mathml.converter import convert as latex_to_mathml
-from lxml import etree
+from lxml import etree  # type: ignore[import-not-found]
 
 FONT_NAME = "Arial"
 TITLE_SIZE = 14
@@ -138,7 +139,7 @@ def configure_table(table, widths):
 
 def build_document(title, exercises, transform, output):
     doc = Document()
-    normal = doc.styles["Normal"]
+    normal = cast(Any, doc.styles["Normal"])
     normal.font.name = FONT_NAME
     normal.element.rPr.rFonts.set(qn("w:eastAsia"), FONT_NAME)
 
