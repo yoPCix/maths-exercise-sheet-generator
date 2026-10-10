@@ -11,9 +11,10 @@ Use the current assistant's LLM to compose exercises from the user's description
 
 ## Inputs And Defaults
 
-- Extract the topic, exercise count, difficulty progression, group counts or proportions, example equations, title, and output paths from the request.
+- Extract the topic, exercise count, difficulty progression, group counts or proportions, example equations, title, output paths, and any preferred column count from the request.
 - Treat an explicit breakdown such as `5/5/5/5` as group counts when it sums to the requested total. Otherwise treat it as relative weights, allocate whole exercises by largest remainder, and break ties in the specified group order.
 - Preserve the requested order, with easier exercises first within each group. Do not shuffle groups or distribute them across CSV columns.
+- If the user requests a different page layout, honor it with the generator's `-c` / `--columns` option, defaulting to 3 columns when no value is supplied.
 - Unless the user explicitly specifies a variable or variable set, randomly choose the unknown independently for each exercise from `a,b,c,d,k,m,n,t,v,z,x,y`. Repeated letters are allowed. A letter appearing only in an example equation does not override this default.
 - Use a short topic-based title if none is supplied. Use a descriptive CSV basename in the current workspace and a matching .docx basename unless specified otherwise. Never overwrite user files without permission; choose a new basename if needed.
 - Ask a concise question if the exercise count is missing, requirements conflict, or the target unknown is ambiguous. Do not ask for information that can be inferred from the supplied example.
@@ -41,11 +42,11 @@ Number,ExerciseName,VariableName,LaTeX
 
 ## Document Layout
 
-The CSV is a flat, ordered list, not a three-column spreadsheet. Leave layout to `generate_sheet.py`:
+The CSV is a flat, ordered list, not a spreadsheet. Leave layout to `generate_sheet.py`:
 
 - Centered Arial 14 title.
-- At most three exercise columns, ordered down the first column and then down subsequent columns.
-- The current generator uses up to `ceil(count / 3)` exercises per column: 8 exercises become 3/3/2; 20 become 7/7/6.
+- Use a configurable number of exercise columns, with 3 as the default. The generator accepts `-c` / `--columns` and preserves the requested count when the user supplies one.
+- Exercises are ordered down the first column and then down subsequent columns. With the default 3-column mode, the current generator uses up to `ceil(count / 3)` exercises per column: 8 exercises become 3/3/2; 20 become 7/7/6.
 - Each exercise starts with its number. A nonempty exercise name precedes the equation on its own line; an empty name keeps the number and equation on the same line. Two `VariableName=` lines follow.
 - Equations must be editable Microsoft Equation objects, not images or literal LaTeX text.
 - Keep the document to one page. Never silently omit exercises to make it fit.
@@ -56,10 +57,10 @@ The CSV is a flat, ordered list, not a three-column spreadsheet. Leave layout to
 2. Generate the equations with the current LLM, apply the CSV defaults, and write the CSV to the chosen output path.
 3. Parse the saved CSV using a structured CSV parser. Verify the exact header, four fields per row, requested total, group counts and order, numeric sequential numbering by default, blank names by default, nonempty LaTeX, and matching answer variables. Check each equation's solution and difficulty.
 4. If the user requests CSV only, stop after validation and report its path.
-5. Otherwise configure the Python environment for the generator, use its selected interpreter, and install dependencies from its `requirements.txt` only if needed. Invoke the generator with a quoted title and CSV path, for example:
+5. Otherwise configure the Python environment for the generator, use its selected interpreter, and install dependencies from its `requirements.txt` only if needed. Invoke the generator with a quoted title and CSV path, optionally adding `-c <n>` to override the default three-column layout, for example:
 
    ```powershell
-   & <selected-python> <generator-path> "Addition and Subtraction" <csv-path> -o <docx-path>
+   & <selected-python> <generator-path> "Addition and Subtraction" <csv-path> -o <docx-path> -c 2
    ```
 
 6. If `MML2OMML.XSL` cannot be found, use a supplied `--xsl` path or `MML2OMML_XSL`; otherwise report the missing dependency. Do not replace real equations with text or images.

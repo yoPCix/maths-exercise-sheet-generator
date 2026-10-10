@@ -108,8 +108,8 @@ def choose_layout(columns, available_pt):
     sys.exit("Too many exercises to fit on a single page.")
 
 
-def split_columns(exercises):
-    rows = math.ceil(len(exercises) / MAX_COLUMNS)
+def split_columns(exercises, max_columns=MAX_COLUMNS):
+    rows = math.ceil(len(exercises) / max_columns)
     return [exercises[i:i + rows] for i in range(0, len(exercises), rows)]
 
 
@@ -137,7 +137,7 @@ def configure_table(table, widths):
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
 
 
-def build_document(title, exercises, transform, output):
+def build_document(title, exercises, transform, output, max_columns=MAX_COLUMNS):
     doc = Document()
     normal = cast(Any, doc.styles["Normal"])
     normal.font.name = FONT_NAME
@@ -157,15 +157,15 @@ def build_document(title, exercises, transform, output):
     run.font.size = Pt(TITLE_SIZE)
     run.bold = True
 
-    columns = split_columns(exercises)
+    columns = split_columns(exercises, max_columns=max_columns)
 
     available_pt = PAGE_HEIGHT.pt - 2 * MARGIN.pt - (TITLE_SIZE * 1.2 + 12) - 6
     font_pt, gap = choose_layout(columns, available_pt)
     normal.font.size = Pt(font_pt)
 
-    column_width = int((PAGE_WIDTH - 2 * MARGIN) / MAX_COLUMNS)
-    outer_table = doc.add_table(rows=1, cols=MAX_COLUMNS)
-    configure_table(outer_table, [column_width] * MAX_COLUMNS)
+    column_width = int((PAGE_WIDTH - 2 * MARGIN) / max_columns)
+    outer_table = doc.add_table(rows=1, cols=max_columns)
+    configure_table(outer_table, [column_width] * max_columns)
     for column, outer_cell in zip(columns, outer_table.rows[0].cells):
         table = outer_cell.add_table(rows=0, cols=2)
         outer_cell._tc.remove(outer_cell.paragraphs[0]._p)
@@ -248,8 +248,13 @@ def main():
     parser.add_argument("title", help="Sheet title")
     parser.add_argument("csv_file", help="CSV with columns: Number,ExerciseName,VariableName,LaTeX")
     parser.add_argument("-o", "--output", help="Output .docx path (default: CSV name with .docx extension)")
+    parser.add_argument("-c", "--columns", type=int, default=MAX_COLUMNS,
+                        help=f"Number of columns to use on the page (default: {MAX_COLUMNS})")
     parser.add_argument("--xsl", help="Path to MML2OMML.XSL (from Microsoft Office)")
     args = parser.parse_args()
+
+    if args.columns <= 0:
+        parser.error("--columns must be a positive integer")
 
     exercises = read_exercises(args.csv_file)
     if not exercises:
@@ -257,7 +262,7 @@ def main():
 
     transform = etree.XSLT(etree.parse(find_xsl(args.xsl)))
     output = args.output or str(Path(args.csv_file).with_suffix(".docx"))
-    build_document(args.title, exercises, transform, output)
+    build_document(args.title, exercises, transform, output, max_columns=args.columns)
     print(f"Created {output}")
 
 
