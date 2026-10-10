@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 
 from docx import Document
-from docx.enum.section import WD_SECTION
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
@@ -25,7 +25,7 @@ MAX_COLUMNS = 3
 MAX_FONT_SIZE = 12
 MIN_FONT_SIZE = 8
 MIN_GAP_PT = 4
-MAX_GAP_PT = 60
+MAX_GAP_PT = 20
 
 PAGE_WIDTH = Cm(21.0)
 PAGE_HEIGHT = Cm(29.7)
@@ -71,7 +71,21 @@ def clean_latex(latex):
 
 def latex_to_omml(latex, transform):
     mathml = etree.fromstring(latex_to_mathml(clean_latex(latex)).encode("utf-8"))
-    return transform(mathml).getroot()
+    omml = transform(mathml).getroot()
+    if omml.tag == qn("m:oMath"):
+        math_paragraph = OxmlElement("m:oMathPara")
+        math_paragraph.append(omml)
+        omml = math_paragraph
+    properties = omml.find(qn("m:oMathParaPr"))
+    if properties is None:
+        properties = OxmlElement("m:oMathParaPr")
+        omml.insert(0, properties)
+    justification = properties.find(qn("m:jc"))
+    if justification is None:
+        justification = OxmlElement("m:jc")
+        properties.append(justification)
+    justification.set(qn("m:val"), "left")
+    return omml
 
 
 def estimate_exercise_height(exercise, font_pt):
@@ -79,14 +93,14 @@ def estimate_exercise_height(exercise, font_pt):
     lines = 1 if exercise.get("ExerciseName") else 0
     latex = exercise.get("LaTeX", "")
     eq_lines = 2.2 if any(t in latex for t in (r"\frac", r"\dfrac", r"\sqrt", r"\sum", r"\int", "^", "_")) else 1.2
-    return line * (lines + eq_lines + 2)
+    return line * (lines + eq_lines + 2 * 1.2)
 
 
 def choose_layout(columns, available_pt):
     """Pick the largest font size (and gap between exercises) that fits on one page."""
     for font_pt in range(MAX_FONT_SIZE, MIN_FONT_SIZE - 1, -1):
         worst = max(sum(estimate_exercise_height(e, font_pt) for e in col) for col in columns)
-        rows = max(len(col) for col in columns)
+        rows = max(sum(3 + bool(ex.get("ExerciseName")) for ex in col) for col in columns)
         gap = (available_pt - worst) / rows
         if gap >= MIN_GAP_PT:
             return font_pt, min(gap, MAX_GAP_PT)
@@ -98,25 +112,28 @@ def split_columns(exercises):
     return [exercises[i:i + rows] for i in range(0, len(exercises), rows)]
 
 
-def set_columns(section, count):
-    sect_pr = section._sectPr
-    cols = sect_pr.find(qn("w:cols"))
-    if cols is None:
-        cols = OxmlElement("w:cols")
-        sect_pr.append(cols)
-    cols.set(qn("w:num"), str(count))
-    cols.set(qn("w:space"), str(int(Cm(0.8).twips)))
-
-
-def add_paragraph(doc, text="", space_after=0, column_break=False):
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(space_after)
-    if column_break:
-        p.add_run().add_break(WD_BREAK.COLUMN)
-    if text:
-        p.add_run(text)
-    return p
+def configure_table(table, widths):
+    table.autofit = False
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = OxmlElement(f"w:{edge}")
+        border.set(qn("w:val"), "nil")
+        borders.append(border)
+    table._tbl.tblPr.append(borders)
+    margins = OxmlElement("w:tblCellMar")
+    for edge in ("top", "left", "bottom", "right"):
+        margin = OxmlElement(f"w:{edge}")
+        margin.set(qn("w:w"), "0")
+        margin.set(qn("w:type"), "dxa")
+        margins.append(margin)
+    table._tbl.tblPr.append(margins)
+    for column, width in zip(table.columns, widths):
+        column.width = width
+    for row in table.rows:
+        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+        for cell, width in zip(row.cells, widths):
+            cell.width = width
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
 
 
 def build_document(title, exercises, transform, output):
@@ -127,7 +144,8 @@ def build_document(title, exercises, transform, output):
 
     section = doc.sections[0]
     section.page_width, section.page_height = PAGE_WIDTH, PAGE_HEIGHT
-    section.top_margin = section.bottom_margin = MARGIN
+    section.top_margin = MARGIN
+    section.bottom_margin = MARGIN - Pt(MAX_FONT_SIZE)
     section.left_margin = section.right_margin = MARGIN
 
     title_p = doc.add_paragraph()
@@ -138,31 +156,88 @@ def build_document(title, exercises, transform, output):
     run.font.size = Pt(TITLE_SIZE)
     run.bold = True
 
-    body = doc.add_section(WD_SECTION.CONTINUOUS)
     columns = split_columns(exercises)
-    set_columns(body, len(columns))
 
     available_pt = PAGE_HEIGHT.pt - 2 * MARGIN.pt - (TITLE_SIZE * 1.2 + 12) - 6
     font_pt, gap = choose_layout(columns, available_pt)
     normal.font.size = Pt(font_pt)
 
-    for col_index, column in enumerate(columns):
-        for ex_index, ex in enumerate(column):
+    column_width = int((PAGE_WIDTH - 2 * MARGIN) / MAX_COLUMNS)
+    outer_table = doc.add_table(rows=1, cols=MAX_COLUMNS)
+    configure_table(outer_table, [column_width] * MAX_COLUMNS)
+    for column, outer_cell in zip(columns, outer_table.rows[0].cells):
+        table = outer_cell.add_table(rows=0, cols=2)
+        outer_cell._tc.remove(outer_cell.paragraphs[0]._p)
+        for ex in column:
             number, name, var = ex.get("Number", ""), ex.get("ExerciseName", ""), ex.get("VariableName", "")
-            omml = latex_to_omml(ex.get("LaTeX", ""), transform)
-            # Breaking at the start of the column's first paragraph avoids an empty line at the top.
-            column_break = ex_index == 0 and col_index > 0
-
+            lines = []
             if name:
-                add_paragraph(doc, f"{number}) {name}", column_break=column_break).paragraph_format.keep_with_next = True
-                eq_p = add_paragraph(doc)
-            else:
-                eq_p = add_paragraph(doc, f"{number}) ", column_break=column_break)
-            eq_p._p.append(omml)
-            eq_p.paragraph_format.keep_with_next = True
+                lines.append((name, None))
+            lines.extend([(None, ex.get("LaTeX", "")), (None, f"{var}="), (None, f"{var}=")])
+            for line_index, (text, latex) in enumerate(lines):
+                cells = table.add_row().cells
+                if line_index == 0:
+                    cells[0].paragraphs[0].add_run(f"{number})")
+                paragraph = cells[1].paragraphs[0]
+                if text is not None:
+                    paragraph.add_run(text)
+                else:
+                    omml = latex_to_omml(latex, transform)
+                    if line_index == bool(name):
+                        for math_run in omml.iter(qn("m:r")):
+                            properties = math_run.find(qn("m:rPr"))
+                            if properties is None:
+                                properties = OxmlElement("m:rPr")
+                                math_run.insert(0, properties)
+                            style = properties.find(qn("m:sty"))
+                            if style is None:
+                                style = OxmlElement("m:sty")
+                                properties.append(style)
+                            style.set(qn("m:val"), "b" if style.get(qn("m:val")) == "p" else "bi")
+                        run_properties = OxmlElement("w:rPr")
+                        run_properties.append(OxmlElement("w:b"))
+                        run_properties.append(OxmlElement("w:bCs"))
+                        paragraph._p.get_or_add_pPr().append(run_properties)
+                        for properties in list(omml.iter()):
+                            tag = etree.QName(properties)
+                            if tag.namespace != etree.QName(qn("m:oMath")).namespace:
+                                continue
+                            if not tag.localname.endswith("Pr") or tag.localname in ("rPr", "ctrlPr", "oMathParaPr"):
+                                continue
+                            control = properties.find(qn("m:ctrlPr"))
+                            if control is None:
+                                control = OxmlElement("m:ctrlPr")
+                                properties.append(control)
+                            control_run = control.find(qn("w:rPr"))
+                            if control_run is None:
+                                control_run = OxmlElement("w:rPr")
+                                control.append(control_run)
+                            for property_name in ("b", "bCs"):
+                                bold = control_run.find(qn(f"w:{property_name}"))
+                                if bold is None:
+                                    bold = OxmlElement(f"w:{property_name}")
+                                    control_run.append(bold)
+                                bold.set(qn("w:val"), "1")
+                    paragraph._p.append(omml)
+                for cell in cells:
+                    paragraph = cell.paragraphs[0]
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                    paragraph.paragraph_format.space_before = Pt(0)
+                    paragraph.paragraph_format.space_after = Pt(gap)
+                    paragraph.paragraph_format.keep_with_next = line_index < len(lines) - 1
+        number_width = max(Cm(0.94), Pt((max(len(ex.get("Number", "")) for ex in column) + 1) * font_pt * 0.6))
+        configure_table(table, [number_width, column_width - number_width])
 
-            add_paragraph(doc, f"{var}=").paragraph_format.keep_with_next = True
-            add_paragraph(doc, f"{var}=", space_after=gap)
+    for cell in outer_table.rows[0].cells:
+        paragraph = cell.paragraphs[-1]
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.paragraph_format.line_spacing = Pt(1)
+        paragraph.add_run().font.size = Pt(1)
+    trailing_paragraph = doc.add_paragraph()
+    trailing_paragraph.paragraph_format.space_after = Pt(0)
+    trailing_paragraph.paragraph_format.line_spacing = Pt(1)
+    trailing_paragraph.add_run().font.size = Pt(1)
 
     doc.save(output)
 

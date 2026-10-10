@@ -14,9 +14,11 @@ Use the current assistant's LLM to compose exercises from the user's description
 - Extract the topic, exercise count, difficulty progression, group counts or proportions, example equations, title, and output paths from the request.
 - Treat an explicit breakdown such as `5/5/5/5` as group counts when it sums to the requested total. Otherwise treat it as relative weights, allocate whole exercises by largest remainder, and break ties in the specified group order.
 - Preserve the requested order, with easier exercises first within each group. Do not shuffle groups or distribute them across CSV columns.
+- Unless the user explicitly specifies a variable or variable set, randomly choose the unknown independently for each exercise from `a,b,c,d,k,m,n,t,v,z,x,y`. Repeated letters are allowed. A letter appearing only in an example equation does not override this default.
 - Use a short topic-based title if none is supplied. Use a descriptive CSV basename in the current workspace and a matching .docx basename unless specified otherwise. Never overwrite user files without permission; choose a new basename if needed.
 - Ask a concise question if the exercise count is missing, requirements conflict, or the target unknown is ambiguous. Do not ask for information that can be inferred from the supplied example.
-- Locate `generate_sheet.py` and read the workspace's `sample.csv` if present before generating. The known installation is `C:\Source\maths-exercise-sheet-generator\generate_sheet.py`; use it as a fallback when working elsewhere. If no generator is available, still create the CSV and report that document generation is unavailable.
+- Resolve paths relative to the current workspace root. Use `./generate_sheet.py` and read `./sample.csv` if present before generating. If no generator is available, still create the CSV and report that document generation is unavailable.
+- Store the CSV file in `./exercises` folder by default.
 
 ## CSV Contract
 
@@ -31,7 +33,7 @@ Number,ExerciseName,VariableName,LaTeX
 
 - `Number`: consecutive integers starting at 1 by default, without a closing parenthesis. Use an alternative numbering scheme only when explicitly requested.
 - `ExerciseName`: empty by default. Include names or instructions only when requested. Never invent group-heading rows.
-- `VariableName`: the unknown being solved for in that row's equation. Follow the variable in the user's example; for `1+a=5`, use `a`. If the user explicitly asks for a different answer label, honor it. An equation must have a clearly identifiable unknown; do not silently substitute a label for a missing unknown.
+- `VariableName`: the unknown being solved for in that row's equation. Use the randomly chosen letter from the default pool unless the user explicitly specifies otherwise, and use the same letter in `LaTeX`. If the user explicitly asks for a different answer label, honor it. An equation must have a clearly identifiable unknown; do not silently substitute a label for a missing unknown.
 - `LaTeX`: mandatory and nonempty for every row. Use valid mathematical LaTeX, without `$`, `$$`, `\(`, or `\)` wrappers. Use single backslashes in the actual CSV, not JSON-escaped backslashes. Do not include solutions or explanatory prose in this field.
 - Produce UTF-8, comma-delimited CSV, one exercise per row, exactly four fields. Quote any field containing a comma, double quote, or newline; double embedded double quotes. Use a CSV writer when available. Do not put Markdown fences in the saved file.
 - For decimal numbers, use a decimal point by default. Honor an explicitly requested decimal comma using valid LaTeX and CSV quoting.
@@ -50,7 +52,7 @@ The CSV is a flat, ordered list, not a three-column spreadsheet. Leave layout to
 
 ## Workflow
 
-1. Resolve the requested counts and sequence. Use the user's supplied example as the model for notation and answer variable.
+1. Resolve the requested counts and sequence. Use the user's supplied example as the model for notation. Apply the random-variable default unless the user explicitly specifies a variable or variable set.
 2. Generate the equations with the current LLM, apply the CSV defaults, and write the CSV to the chosen output path.
 3. Parse the saved CSV using a structured CSV parser. Verify the exact header, four fields per row, requested total, group counts and order, numeric sequential numbering by default, blank names by default, nonempty LaTeX, and matching answer variables. Check each equation's solution and difficulty.
 4. If the user requests CSV only, stop after validation and report its path.
@@ -70,30 +72,30 @@ User request:
 
 > Create a maths exercise sheet for simple addition. 20 examples. For example '1 + a = 5'. Start with easier (addition), then subtraction, then addition with decimal fractions, then subtraction with decimal numbers. proportion 5/5/5/5.
 
-Interpret this as 20 equations in four consecutive groups of five, with `a` as the unknown, no exercise names, and decimal fractions written as decimal numbers. Use the title `Addition and Subtraction`. A valid CSV is:
+Interpret this as 20 equations in four consecutive groups of five, with randomly chosen unknowns from the default pool, no exercise names, and decimal fractions written as decimal numbers. The example's `a` illustrates notation, not an explicit variable requirement. Use the title `Addition and Subtraction`. One valid randomized CSV is:
 
 ```csv
 Number,ExerciseName,VariableName,LaTeX
 1,,a,1+a=5
-2,,a,2+a=8
-3,,a,4+a=11
-4,,a,7+a=16
-5,,a,9+a=23
-6,,a,a-1=4
-7,,a,a-3=6
-8,,a,a-5=8
-9,,a,a-7=12
-10,,a,a-9=17
-11,,a,0.5+a=2.0
-12,,a,1.2+a=3.8
-13,,a,2.35+a=5.70
+2,,t,2+t=8
+3,,c,4+c=11
+4,,y,7+y=16
+5,,m,9+m=23
+6,,k,k-1=4
+7,,b,b-3=6
+8,,z,z-5=8
+9,,n,n-7=12
+10,,d,d-9=17
+11,,v,0.5+v=2.0
+12,,x,1.2+x=3.8
+13,,m,2.35+m=5.70
 14,,a,4.75+a=10.20
-15,,a,6.85+a=14.30
-16,,a,a-0.5=1.5
-17,,a,a-1.3=2.4
-18,,a,a-2.45=3.80
-19,,a,a-4.65=7.25
-20,,a,a-6.85=9.75
+15,,z,6.85+z=14.30
+16,,c,c-0.5=1.5
+17,,v,v-1.3=2.4
+18,,k,k-2.45=3.80
+19,,y,y-4.65=7.25
+20,,b,b-6.85=9.75
 ```
 
 Save only the CSV contents, then invoke the generator. Preserve the sequence: rows 1-5 integer addition, 6-10 integer subtraction, 11-15 decimal addition, and 16-20 decimal subtraction. The document's column starts are exercises 1, 8, and 15; topic boundaries do not need to coincide with column boundaries.
