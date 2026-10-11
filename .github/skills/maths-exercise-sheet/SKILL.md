@@ -22,8 +22,43 @@ Use the current assistant's LLM to compose exercises from the user's description
 - Store the CSV file in `./exercises` folder by default.
 
 ## LaTeX tips
-- for powers, if the power is a negative number, enclose in braces, e.g., use `x^{-2}` instead of `x^-2`
-- for powers, if the base is a negative number, enclose it in braces, e.g., use `({-2})^3` instead of `(-2)^3`
+- use `·` for multiplication instead of `*`
+
+## Word Equation / LaTeX Conversion Guidelines
+
+When generating or converting mathematical expressions intended for Microsoft Word’s equation editor (LaTeX input mode), follow these rules. Word’s LaTeX-to-OMML converter is limited and not a full TeX parser.
+
+### Exponents and Subscripts
+- Always brace multi-character, negative, or complex exponents/subscripts.
+  - Correct: `a^{-2}`, `x^{10}`, `e^{-x^2}`, `a_{i,j}`
+  - Avoid: `a^-2`, `x^10` (unbraced multi-digit), `a_i,j`
+- Single positive digits may work unbraced (`a^2`), but bracing is preferred for consistency.
+
+### Grouping for Nested Expressions
+- Prefer explicit braces `{}` when a parenthesized expression (or any complex group) is the base of a superscript/subscript.
+  - Preferred (Word-friendly): `({(a^2)^{-3}})^2` or `{(a^{2})^{-3}}^{2}`
+  - May fail in Word: `((a^2)^{-3})^2`
+- Use braces to force unambiguous grouping of the base before applying `^` or `_`.
+- Nested bare parentheses + scripts (especially negative exponents) frequently confuse Word’s speculative delimiter matching.
+
+### General Conversion Tips
+- Keep expressions as simple as possible; excessive nesting of bare parentheses increases failure risk.
+- After pasting into a Word equation field, convert to Professional format (Convert button or Ctrl+=).
+- Negative signs in exponents must be inside braces.
+- For troubleshooting, convert the equation to Linear (UnicodeMath) format to inspect how Word parsed the structure.
+- Word supports most common LaTeX math commands and bare parentheses, but explicit braces are the most reliable grouping mechanism for scripts.
+
+### Examples
+| Intended | Word-safe LaTeX |
+|----------|-----------------|
+| \( a^{-2} \) | `a^{-2}` |
+| \( ((a^2)^{-3})^2 \) | `({(a^2)^{-3}})^2` or `{(a^{2})^{-3}}^{2}` |
+| \( (x+y)^{n+1} \) | `(x+y)^{n+1}` or `{(x+y)}^{n+1}` |
+| \( e^{-x^2} \) | `e^{-x^2}` |
+| \( (-2)^3 \) | `({-2})^3` |
+| \( ((a^2)^-3)^2 \) | `({(a^2)^{-3}})^2` |
+
+When outputting LaTeX that will be pasted into Word equations, apply these rules by default.
 
 ## CSV Contract
 
@@ -40,7 +75,7 @@ Number,ExerciseName,LaTeX1,LaTeX2,LaTeX3
 - `Number`: consecutive integers starting at 1 by default, without a closing parenthesis. Use an alternative numbering scheme only when explicitly requested.
 - `ExerciseName`: empty by default. Include names or instructions only when requested. Never invent group-heading rows.
 - `LaTeX1`: mandatory and nonempty for every generated exercise; contains the actual exercise and renders in bold. Use the randomly chosen unknown from the default pool unless the user explicitly specifies otherwise. An equation must have a clearly identifiable unknown; do not silently substitute a label for a missing unknown. Do not include solutions or explanatory prose in this field.
-- `LaTeX2` through `LaTeXN`: subsequent lines in numeric column order, rendered without bold. By default, include two answer prompts in `LaTeX2` and `LaTeX3`, each containing `<unknown>=` with the same unknown as the exercise. Honor requested answer labels, line counts, and blank working space. The generator does not infer an unknown or automatically add answer lines; there is no `VariableName` column.
+- `LaTeX2` through `LaTeXN`: subsequent lines in numeric column order, rendered without bold. By default, include two answer prompts in `LaTeX2` and `LaTeX3`, each containing `<unknown>=` with the same unknown as the exercise. Honor requested answer labels, line counts, and blank working space. The generator does not infer an unknown or automatically add answer lines.
 - A value of `--blank--` creates an empty text line, not an equation. An empty value creates no line at all. Use the placeholder for each requested blank line; do not use an empty value to reserve working space.
 - For all equation fields, use valid mathematical LaTeX without `$`, `$$`, `\(`, or `\)` wrappers. Use single backslashes in the actual CSV, not JSON-escaped backslashes.
 - Produce UTF-8, comma-delimited CSV, one exercise per row, with the same number of fields as the header (`2 + N`). Quote any field containing a comma, double quote, or newline; double embedded double quotes. Use a CSV writer when available. Do not put Markdown fences in the saved file.
