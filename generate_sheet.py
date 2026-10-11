@@ -1,6 +1,7 @@
 """Generate a single-page maths exercise sheet (.docx) from a CSV file.
 
-CSV columns: Number,ExerciseName,VariableName,LaTeX
+CSV columns: Number,ExerciseName,LaTeX1,...,LaTeXN.
+LaTeX1 is bold; '--blank--' creates a blank text line; empty values omit lines.
 """
 
 import argparse
@@ -54,10 +55,21 @@ def read_exercises(csv_path):
         rows = []
         for row in csv.DictReader(f):
             row = {k.strip(): (v or "").strip() for k, v in row.items() if k}
-            if not row.get("LaTeX") and not row.get("Number"):
+            if not exercise_lines(row) and not row.get("Number"):
                 continue
             rows.append(row)
     return rows
+
+
+def exercise_lines(exercise):
+    lines = []
+    for key, value in exercise.items():
+        suffix = key.removeprefix("LaTeX")
+        if key.startswith("LaTeX") and suffix.isdecimal() and int(suffix) >= 1:
+            latex = value.strip()
+            if latex:
+                lines.append((int(suffix), latex))
+    return sorted(lines)
 
 
 def clean_latex(latex):
@@ -92,17 +104,20 @@ def latex_to_omml(latex, transform):
 def estimate_exercise_height(exercise, font_pt):
     line = font_pt * 1.2
     lines = 1 if exercise.get("ExerciseName") else 0
-    latex = exercise.get("LaTeX", "")
-    eq_lines = 2.2 if any(t in latex for t in (r"\frac", r"\dfrac", r"\sqrt", r"\sum", r"\int", "^", "_")) else 1.2
-    return line * (lines + eq_lines + 2 * 1.2)
+    for _, latex in exercise_lines(exercise):
+        if latex == "--blank--":
+            lines += 1
+        else:
+            lines += 2.2 if any(t in latex for t in (r"\frac", r"\dfrac", r"\sqrt", r"\sum", r"\int", "^", "_")) else 1.2
+    return line * lines
 
 
 def choose_layout(columns, available_pt):
     """Pick the largest font size (and gap between exercises) that fits on one page."""
     for font_pt in range(MAX_FONT_SIZE, MIN_FONT_SIZE - 1, -1):
         worst = max(sum(estimate_exercise_height(e, font_pt) for e in col) for col in columns)
-        rows = max(sum(3 + bool(ex.get("ExerciseName")) for ex in col) for col in columns)
-        gap = (available_pt - worst) / rows
+        rows = max(sum(len(exercise_lines(ex)) + bool(ex.get("ExerciseName")) for ex in col) for col in columns)
+        gap = (available_pt - worst) / max(rows, 1)
         if gap >= MIN_GAP_PT:
             return font_pt, min(gap, MAX_GAP_PT)
     sys.exit("Too many exercises to fit on a single page.")
@@ -170,12 +185,16 @@ def build_document(title, exercises, transform, output, max_columns=MAX_COLUMNS)
         table = outer_cell.add_table(rows=0, cols=2)
         outer_cell._tc.remove(outer_cell.paragraphs[0]._p)
         for ex in column:
-            number, name, var = ex.get("Number", ""), ex.get("ExerciseName", ""), ex.get("VariableName", "")
+            number, name = ex.get("Number", ""), ex.get("ExerciseName", "")
             lines = []
             if name:
-                lines.append((name, None))
-            lines.extend([(None, ex.get("LaTeX", "")), (None, f"{var}="), (None, f"{var}=")])
-            for line_index, (text, latex) in enumerate(lines):
+                lines.append((name, None, False))
+            for latex_index, latex in exercise_lines(ex):
+                if latex == "--blank--":
+                    lines.append(("", None, False))
+                else:
+                    lines.append((None, latex, latex_index == 1))
+            for line_index, (text, latex, bold_exercise) in enumerate(lines):
                 cells = table.add_row().cells
                 if line_index == 0:
                     cells[0].paragraphs[0].add_run(f"{number})")
@@ -184,7 +203,7 @@ def build_document(title, exercises, transform, output, max_columns=MAX_COLUMNS)
                     paragraph.add_run(text)
                 else:
                     omml = latex_to_omml(latex, transform)
-                    if line_index == bool(name):
+                    if bold_exercise:
                         for math_run in omml.iter(qn("m:r")):
                             properties = math_run.find(qn("m:rPr"))
                             if properties is None:
@@ -199,6 +218,10 @@ def build_document(title, exercises, transform, output, max_columns=MAX_COLUMNS)
                         run_properties.append(OxmlElement("w:b"))
                         run_properties.append(OxmlElement("w:bCs"))
                         paragraph._p.get_or_add_pPr().append(run_properties)
+                        for structure_name in ("sSup", "sSub", "sSubSup"):
+                            for structure in omml.iter(qn(f"m:{structure_name}")):
+                                if structure.find(qn(f"m:{structure_name}Pr")) is None:
+                                    structure.insert(0, OxmlElement(f"m:{structure_name}Pr"))
                         for properties in list(omml.iter()):
                             tag = etree.QName(properties)
                             if tag.namespace != etree.QName(qn("m:oMath")).namespace:
@@ -246,7 +269,7 @@ def build_document(title, exercises, transform, output, max_columns=MAX_COLUMNS)
 def main():
     parser = argparse.ArgumentParser(description="Create a single-page maths exercise sheet (.docx) from a CSV file.")
     parser.add_argument("title", help="Sheet title")
-    parser.add_argument("csv_file", help="CSV with columns: Number,ExerciseName,VariableName,LaTeX")
+    parser.add_argument("csv_file", help="CSV with columns: Number,ExerciseName,LaTeX1,...,LaTeXN (use --blank-- for a blank line)")
     parser.add_argument("-o", "--output", help="Output .docx path (default: CSV name with .docx extension)")
     parser.add_argument("-c", "--columns", type=int, default=MAX_COLUMNS,
                         help=f"Number of columns to use on the page (default: {MAX_COLUMNS})")

@@ -21,22 +21,29 @@ Use the current assistant's LLM to compose exercises from the user's description
 - Resolve paths relative to the current workspace root. Use `./generate_sheet.py` and read `./sample.csv` if present before generating. If no generator is available, still create the CSV and report that document generation is unavailable.
 - Store the CSV file in `./exercises` folder by default.
 
+## LaTeX tips
+- for powers, if the power is a negative number, enclose in braces, e.g., use `x^{-2}` instead of `x^-2`
+- for powers, if the base is a negative number, enclose it in braces, e.g., use `({-2})^3` instead of `(-2)^3`
+
 ## CSV Contract
 
-The exact header and field order are:
+Use `Number,ExerciseName` followed by consecutive numbered LaTeX columns from `LaTeX1` through `LaTeXN`. Include as many columns as the longest exercise needs; shorter exercises leave unused fields empty. The default three-line format is:
 
 ```csv
-Number,ExerciseName,VariableName,LaTeX
-1,,a,1+a=5
-2,,x,\frac{x}{4}=5
-3,"Solve, then check",y,y-2=7
+Number,ExerciseName,LaTeX1,LaTeX2,LaTeX3
+1,,1+a=5,a=,a=
+2,,\frac{x}{4}=5,--blank--,--blank--
+3,"Solve, then check",y-2=7,y=,
+4,,3(t-2)=12,,
 ```
 
 - `Number`: consecutive integers starting at 1 by default, without a closing parenthesis. Use an alternative numbering scheme only when explicitly requested.
 - `ExerciseName`: empty by default. Include names or instructions only when requested. Never invent group-heading rows.
-- `VariableName`: the unknown being solved for in that row's equation. Use the randomly chosen letter from the default pool unless the user explicitly specifies otherwise, and use the same letter in `LaTeX`. If the user explicitly asks for a different answer label, honor it. An equation must have a clearly identifiable unknown; do not silently substitute a label for a missing unknown.
-- `LaTeX`: mandatory and nonempty for every row. Use valid mathematical LaTeX, without `$`, `$$`, `\(`, or `\)` wrappers. Use single backslashes in the actual CSV, not JSON-escaped backslashes. Do not include solutions or explanatory prose in this field.
-- Produce UTF-8, comma-delimited CSV, one exercise per row, exactly four fields. Quote any field containing a comma, double quote, or newline; double embedded double quotes. Use a CSV writer when available. Do not put Markdown fences in the saved file.
+- `LaTeX1`: mandatory and nonempty for every generated exercise; contains the actual exercise and renders in bold. Use the randomly chosen unknown from the default pool unless the user explicitly specifies otherwise. An equation must have a clearly identifiable unknown; do not silently substitute a label for a missing unknown. Do not include solutions or explanatory prose in this field.
+- `LaTeX2` through `LaTeXN`: subsequent lines in numeric column order, rendered without bold. By default, include two answer prompts in `LaTeX2` and `LaTeX3`, each containing `<unknown>=` with the same unknown as the exercise. Honor requested answer labels, line counts, and blank working space. The generator does not infer an unknown or automatically add answer lines; there is no `VariableName` column.
+- A value of `--blank--` creates an empty text line, not an equation. An empty value creates no line at all. Use the placeholder for each requested blank line; do not use an empty value to reserve working space.
+- For all equation fields, use valid mathematical LaTeX without `$`, `$$`, `\(`, or `\)` wrappers. Use single backslashes in the actual CSV, not JSON-escaped backslashes.
+- Produce UTF-8, comma-delimited CSV, one exercise per row, with the same number of fields as the header (`2 + N`). Quote any field containing a comma, double quote, or newline; double embedded double quotes. Use a CSV writer when available. Do not put Markdown fences in the saved file.
 - For decimal numbers, use a decimal point by default. Honor an explicitly requested decimal comma using valid LaTeX and CSV quoting.
 - Check that equations are mathematically valid, solvable at the requested level, and varied without unintended duplicates. Internally solve each equation to confirm its intended answer, but do not add an answer column or answer key unless requested.
 
@@ -47,15 +54,15 @@ The CSV is a flat, ordered list, not a spreadsheet. Leave layout to `generate_sh
 - Centered Arial 14 title.
 - Use a configurable number of exercise columns, with 3 as the default. The generator accepts `-c` / `--columns` and preserves the requested count when the user supplies one.
 - Exercises are ordered down the first column and then down subsequent columns. With the default 3-column mode, the current generator uses up to `ceil(count / 3)` exercises per column: 8 exercises become 3/3/2; 20 become 7/7/6.
-- Each exercise starts with its number. A nonempty exercise name precedes the equation on its own line; an empty name keeps the number and equation on the same line. Two `VariableName=` lines follow.
+- Each exercise starts with its number. A nonempty exercise name precedes the equation on its own line; an empty name keeps the number and equation on the same line. `LaTeX1` is bold, including equation structures such as fractions and superscripts. Subsequent populated LaTeX fields supply the remaining lines; `--blank--` supplies an empty text line, and empty values are omitted.
 - Equations must be editable Microsoft Equation objects, not images or literal LaTeX text.
-- Keep the document to one page. Never silently omit exercises to make it fit.
+- Keep the document to one page. The generator estimates font size and spacing from the actual populated lines, including blank text lines. Never silently omit exercises or requested working lines to make it fit.
 
 ## Workflow
 
 1. Resolve the requested counts and sequence. Use the user's supplied example as the model for notation. Apply the random-variable default unless the user explicitly specifies a variable or variable set.
 2. Generate the equations with the current LLM, apply the CSV defaults, and write the CSV to the chosen output path.
-3. Parse the saved CSV using a structured CSV parser. Verify the exact header, four fields per row, requested total, group counts and order, numeric sequential numbering by default, blank names by default, nonempty LaTeX, and matching answer variables. Check each equation's solution and difficulty.
+3. Parse the saved CSV using a structured CSV parser. Verify `Number,ExerciseName` followed by `LaTeX1` through `LaTeXN`, matching field counts per row, requested total, group counts and order, numeric sequential numbering by default, blank names by default, nonempty exercise equations in `LaTeX1`, and matching answer variables where prompts are supplied. Check the requested line counts, distinguishing `--blank--` from omitted empty fields. Check each exercise equation's solution and difficulty.
 4. If the user requests CSV only, stop after validation and report its path.
 5. Otherwise configure the Python environment for the generator, use its selected interpreter, and install dependencies from its `requirements.txt` only if needed. Invoke the generator with a quoted title and CSV path, optionally adding `-c <n>` to override the default three-column layout, for example:
 
@@ -64,7 +71,7 @@ The CSV is a flat, ordered list, not a spreadsheet. Leave layout to `generate_sh
    ```
 
 6. If `MML2OMML.XSL` cannot be found, use a supplied `--xsl` path or `MML2OMML_XSL`; otherwise report the missing dependency. Do not replace real equations with text or images.
-7. Verify generation succeeded and the .docx exists. Check its equation count against the CSV total. When Word is available, open only the generated document read-only, repaginate, and verify the rendered page count is exactly one, then close it and release the automation instance. The generator estimates heights, so file creation alone does not guarantee one-page rendering. If rendering cannot be checked, say that the page count is unverified. If it exceeds one page, report the failure rather than claiming success or removing exercises.
+7. Verify generation succeeded and the .docx exists. Check its equation count against the number of nonempty LaTeX values excluding `--blank--`, not just the exercise count. Check that placeholders create blank text lines, empty values create no lines, and only `LaTeX1` equations are bold. When Word is available, open only the generated document read-only, repaginate, and verify the rendered page count is exactly one, then close it and release the automation instance. The generator estimates heights, so file creation alone does not guarantee one-page rendering. If rendering cannot be checked, say that the page count is unverified. If it exceeds one page, report the failure rather than claiming success or removing exercises.
 8. Return the CSV and .docx paths with a concise generation and verification result. If a dependency or layout check fails, retain the CSV and explain the blocker.
 
 ## Worked Example
@@ -76,27 +83,27 @@ User request:
 Interpret this as 20 equations in four consecutive groups of five, with randomly chosen unknowns from the default pool, no exercise names, and decimal fractions written as decimal numbers. The example's `a` illustrates notation, not an explicit variable requirement. Use the title `Addition and Subtraction`. One valid randomized CSV is:
 
 ```csv
-Number,ExerciseName,VariableName,LaTeX
-1,,a,1+a=5
-2,,t,2+t=8
-3,,c,4+c=11
-4,,y,7+y=16
-5,,m,9+m=23
-6,,k,k-1=4
-7,,b,b-3=6
-8,,z,z-5=8
-9,,n,n-7=12
-10,,d,d-9=17
-11,,v,0.5+v=2.0
-12,,x,1.2+x=3.8
-13,,m,2.35+m=5.70
-14,,a,4.75+a=10.20
-15,,z,6.85+z=14.30
-16,,c,c-0.5=1.5
-17,,v,v-1.3=2.4
-18,,k,k-2.45=3.80
-19,,y,y-4.65=7.25
-20,,b,b-6.85=9.75
+Number,ExerciseName,LaTeX1,LaTeX2,LaTeX3
+1,,1+a=5,a=,a=
+2,,2+t=8,t=,t=
+3,,4+c=11,c=,c=
+4,,7+y=16,y=,y=
+5,,9+m=23,m=,m=
+6,,k-1=4,k=,k=
+7,,b-3=6,b=,b=
+8,,z-5=8,z=,z=
+9,,n-7=12,n=,n=
+10,,d-9=17,d=,d=
+11,,0.5+v=2.0,v=,v=
+12,,1.2+x=3.8,x=,x=
+13,,2.35+m=5.70,m=,m=
+14,,4.75+a=10.20,a=,a=
+15,,6.85+z=14.30,z=,z=
+16,,c-0.5=1.5,c=,c=
+17,,v-1.3=2.4,v=,v=
+18,,k-2.45=3.80,k=,k=
+19,,y-4.65=7.25,y=,y=
+20,,b-6.85=9.75,b=,b=
 ```
 
 Save only the CSV contents, then invoke the generator. Preserve the sequence: rows 1-5 integer addition, 6-10 integer subtraction, 11-15 decimal addition, and 16-20 decimal subtraction. The document's column starts are exercises 1, 8, and 15; topic boundaries do not need to coincide with column boundaries.
