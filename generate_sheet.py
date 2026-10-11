@@ -1,19 +1,17 @@
 """Generate a single-page maths exercise sheet (.docx) from a CSV file.
 
-CSV columns: Number,ExerciseName,LaTeX1,...,LaTeXN.
-LaTeX1 is bold; '--blank--' creates a blank text line; empty values omit lines.
+CSV columns: Number,ExerciseName,LaTeX1,...,LaTeXN (or a single legacy LaTeX column).
+Each nonempty LaTeX field becomes a left-aligned equation line; '--blank--' creates a blank line.
 """
 
 import argparse
 import csv
-import math
 import os
 import sys
 from pathlib import Path
 from typing import Any, cast
 
 from docx import Document
-from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -23,7 +21,6 @@ from lxml import etree  # type: ignore[import-not-found]
 
 FONT_NAME = "Arial"
 TITLE_SIZE = 14
-MAX_COLUMNS = 3
 MAX_FONT_SIZE = 12
 MIN_FONT_SIZE = 8
 MIN_GAP_PT = 4
@@ -55,7 +52,7 @@ def read_exercises(csv_path):
         rows = []
         for row in csv.DictReader(f):
             row = {k.strip(): (v or "").strip() for k, v in row.items() if k}
-            if not exercise_lines(row) and not row.get("Number"):
+            if not exercise_lines(row):
                 continue
             rows.append(row)
     return rows
@@ -64,7 +61,7 @@ def read_exercises(csv_path):
 def exercise_lines(exercise):
     lines = []
     for key, value in exercise.items():
-        suffix = key.removeprefix("LaTeX")
+        suffix = "1" if key == "LaTeX" else key.removeprefix("LaTeX")
         if key.startswith("LaTeX") and suffix.isdecimal() and int(suffix) >= 1:
             latex = value.strip()
             if latex:
@@ -103,7 +100,7 @@ def latex_to_omml(latex, transform):
 
 def estimate_exercise_height(exercise, font_pt):
     line = font_pt * 1.2
-    lines = 1 if exercise.get("ExerciseName") else 0
+    lines = 0
     for _, latex in exercise_lines(exercise):
         if latex == "--blank--":
             lines += 1
@@ -112,47 +109,18 @@ def estimate_exercise_height(exercise, font_pt):
     return line * lines
 
 
-def choose_layout(columns, available_pt):
-    """Pick the largest font size (and gap between exercises) that fits on one page."""
+def choose_layout(exercises, available_pt):
+    """Pick the largest font size and paragraph gap that fit on one page."""
     for font_pt in range(MAX_FONT_SIZE, MIN_FONT_SIZE - 1, -1):
-        worst = max(sum(estimate_exercise_height(e, font_pt) for e in col) for col in columns)
-        rows = max(sum(len(exercise_lines(ex)) + bool(ex.get("ExerciseName")) for ex in col) for col in columns)
+        worst = sum(estimate_exercise_height(exercise, font_pt) for exercise in exercises)
+        rows = sum(len(exercise_lines(exercise)) for exercise in exercises)
         gap = (available_pt - worst) / max(rows, 1)
         if gap >= MIN_GAP_PT:
             return font_pt, min(gap, MAX_GAP_PT)
     sys.exit("Too many exercises to fit on a single page.")
 
 
-def split_columns(exercises, max_columns=MAX_COLUMNS):
-    rows = math.ceil(len(exercises) / max_columns)
-    return [exercises[i:i + rows] for i in range(0, len(exercises), rows)]
-
-
-def configure_table(table, widths):
-    table.autofit = False
-    borders = OxmlElement("w:tblBorders")
-    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
-        border = OxmlElement(f"w:{edge}")
-        border.set(qn("w:val"), "nil")
-        borders.append(border)
-    table._tbl.tblPr.append(borders)
-    margins = OxmlElement("w:tblCellMar")
-    for edge in ("top", "left", "bottom", "right"):
-        margin = OxmlElement(f"w:{edge}")
-        margin.set(qn("w:w"), "0")
-        margin.set(qn("w:type"), "dxa")
-        margins.append(margin)
-    table._tbl.tblPr.append(margins)
-    for column, width in zip(table.columns, widths):
-        column.width = width
-    for row in table.rows:
-        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
-        for cell, width in zip(row.cells, widths):
-            cell.width = width
-            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
-
-
-def build_document(title, exercises, transform, output, max_columns=MAX_COLUMNS):
+def build_document(title, exercises, transform, output):
     doc = Document()
     normal = cast(Any, doc.styles["Normal"])
     normal.font.name = FONT_NAME
@@ -172,96 +140,20 @@ def build_document(title, exercises, transform, output, max_columns=MAX_COLUMNS)
     run.font.size = Pt(TITLE_SIZE)
     run.bold = True
 
-    columns = split_columns(exercises, max_columns=max_columns)
-
     available_pt = PAGE_HEIGHT.pt - 2 * MARGIN.pt - (TITLE_SIZE * 1.2 + 12) - 6
-    font_pt, gap = choose_layout(columns, available_pt)
+    font_pt, gap = choose_layout(exercises, available_pt)
     normal.font.size = Pt(font_pt)
 
-    column_width = int((PAGE_WIDTH - 2 * MARGIN) / max_columns)
-    outer_table = doc.add_table(rows=1, cols=max_columns)
-    configure_table(outer_table, [column_width] * max_columns)
-    for column, outer_cell in zip(columns, outer_table.rows[0].cells):
-        table = outer_cell.add_table(rows=0, cols=2)
-        outer_cell._tc.remove(outer_cell.paragraphs[0]._p)
-        for ex in column:
-            number, name = ex.get("Number", ""), ex.get("ExerciseName", "")
-            lines = []
-            if name:
-                lines.append((name, None, False))
-            for latex_index, latex in exercise_lines(ex):
-                if latex == "--blank--":
-                    lines.append(("", None, False))
-                else:
-                    lines.append((None, latex, latex_index == 1))
-            for line_index, (text, latex, bold_exercise) in enumerate(lines):
-                cells = table.add_row().cells
-                if line_index == 0:
-                    cells[0].paragraphs[0].add_run(f"{number})")
-                paragraph = cells[1].paragraphs[0]
-                if text is not None:
-                    paragraph.add_run(text)
-                else:
-                    omml = latex_to_omml(latex, transform)
-                    if bold_exercise:
-                        for math_run in omml.iter(qn("m:r")):
-                            properties = math_run.find(qn("m:rPr"))
-                            if properties is None:
-                                properties = OxmlElement("m:rPr")
-                                math_run.insert(0, properties)
-                            style = properties.find(qn("m:sty"))
-                            if style is None:
-                                style = OxmlElement("m:sty")
-                                properties.append(style)
-                            style.set(qn("m:val"), "b" if style.get(qn("m:val")) == "p" else "bi")
-                        run_properties = OxmlElement("w:rPr")
-                        run_properties.append(OxmlElement("w:b"))
-                        run_properties.append(OxmlElement("w:bCs"))
-                        paragraph._p.get_or_add_pPr().append(run_properties)
-                        for structure_name in ("sSup", "sSub", "sSubSup"):
-                            for structure in omml.iter(qn(f"m:{structure_name}")):
-                                if structure.find(qn(f"m:{structure_name}Pr")) is None:
-                                    structure.insert(0, OxmlElement(f"m:{structure_name}Pr"))
-                        for properties in list(omml.iter()):
-                            tag = etree.QName(properties)
-                            if tag.namespace != etree.QName(qn("m:oMath")).namespace:
-                                continue
-                            if not tag.localname.endswith("Pr") or tag.localname in ("rPr", "ctrlPr", "oMathParaPr"):
-                                continue
-                            control = properties.find(qn("m:ctrlPr"))
-                            if control is None:
-                                control = OxmlElement("m:ctrlPr")
-                                properties.append(control)
-                            control_run = control.find(qn("w:rPr"))
-                            if control_run is None:
-                                control_run = OxmlElement("w:rPr")
-                                control.append(control_run)
-                            for property_name in ("b", "bCs"):
-                                bold = control_run.find(qn(f"w:{property_name}"))
-                                if bold is None:
-                                    bold = OxmlElement(f"w:{property_name}")
-                                    control_run.append(bold)
-                                bold.set(qn("w:val"), "1")
-                    paragraph._p.append(omml)
-                for cell in cells:
-                    paragraph = cell.paragraphs[0]
-                    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                    paragraph.paragraph_format.space_before = Pt(0)
-                    paragraph.paragraph_format.space_after = Pt(gap)
-                    paragraph.paragraph_format.keep_with_next = line_index < len(lines) - 1
-        number_width = max(Cm(0.94), Pt((max(len(ex.get("Number", "")) for ex in column) + 1) * font_pt * 0.6))
-        configure_table(table, [number_width, column_width - number_width])
-
-    for cell in outer_table.rows[0].cells:
-        paragraph = cell.paragraphs[-1]
-        paragraph.paragraph_format.space_before = Pt(0)
-        paragraph.paragraph_format.space_after = Pt(0)
-        paragraph.paragraph_format.line_spacing = Pt(1)
-        paragraph.add_run().font.size = Pt(1)
-    trailing_paragraph = doc.add_paragraph()
-    trailing_paragraph.paragraph_format.space_after = Pt(0)
-    trailing_paragraph.paragraph_format.line_spacing = Pt(1)
-    trailing_paragraph.add_run().font.size = Pt(1)
+    for exercise in exercises:
+        lines = exercise_lines(exercise)
+        for line_index, (_, latex) in enumerate(lines):
+            paragraph = doc.add_paragraph()
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(gap)
+            paragraph.paragraph_format.keep_with_next = line_index < len(lines) - 1
+            if latex != "--blank--":
+                paragraph._p.append(latex_to_omml(latex, transform))
 
     doc.save(output)
 
@@ -269,15 +161,10 @@ def build_document(title, exercises, transform, output, max_columns=MAX_COLUMNS)
 def main():
     parser = argparse.ArgumentParser(description="Create a single-page maths exercise sheet (.docx) from a CSV file.")
     parser.add_argument("title", help="Sheet title")
-    parser.add_argument("csv_file", help="CSV with columns: Number,ExerciseName,LaTeX1,...,LaTeXN (use --blank-- for a blank line)")
+    parser.add_argument("csv_file", help="CSV with columns: Number,ExerciseName,LaTeX1,...,LaTeXN or LaTeX (use --blank-- for a blank line)")
     parser.add_argument("-o", "--output", help="Output .docx path (default: CSV name with .docx extension)")
-    parser.add_argument("-c", "--columns", type=int, default=MAX_COLUMNS,
-                        help=f"Number of columns to use on the page (default: {MAX_COLUMNS})")
     parser.add_argument("--xsl", help="Path to MML2OMML.XSL (from Microsoft Office)")
     args = parser.parse_args()
-
-    if args.columns <= 0:
-        parser.error("--columns must be a positive integer")
 
     exercises = read_exercises(args.csv_file)
     if not exercises:
@@ -285,7 +172,7 @@ def main():
 
     transform = etree.XSLT(etree.parse(find_xsl(args.xsl)))
     output = args.output or str(Path(args.csv_file).with_suffix(".docx"))
-    build_document(args.title, exercises, transform, output, max_columns=args.columns)
+    build_document(args.title, exercises, transform, output)
     print(f"Created {output}")
 
 

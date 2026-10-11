@@ -1,3 +1,4 @@
 python-docx
 latex2mathml
 lxml
+pywin32
