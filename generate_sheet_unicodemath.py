@@ -9,7 +9,6 @@ Microsoft Word is required to convert UnicodeMath expressions to OMML.
 import argparse
 import csv
 import os
-import re
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -31,10 +30,6 @@ PAGE_WIDTH = Cm(21.0)
 PAGE_HEIGHT = Cm(29.7)
 MARGIN = Cm(1.5)
 MATH_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
-FRACTION_ATOM = r"(?:\([^()]*\)|[A-Za-z0-9]+(?:\^\([^()]*\)|_[A-Za-z0-9]+)?)"
-FRACTION_PATTERN = re.compile(
-    rf"(?P<numerator>{FRACTION_ATOM})\s*/\s*(?P<denominator>{FRACTION_ATOM})"
-)
 
 
 def read_exercises(csv_path):
@@ -59,19 +54,6 @@ def exercise_lines(exercise):
     return sorted(lines)
 
 
-def word_linear_format(unicode_math):
-    def replace_fraction(match):
-        numerator = match.group("numerator")
-        denominator = match.group("denominator")
-        if numerator.startswith("(") and numerator.endswith(")"):
-            numerator = numerator[1:-1]
-        if denominator.startswith("(") and denominator.endswith(")"):
-            denominator = denominator[1:-1]
-        return rf"\frac{{{numerator}}}{{{denominator}}}"
-
-    return FRACTION_PATTERN.sub(replace_fraction, unicode_math)
-
-
 class UnicodeMathConverter:
     def __init__(self):
         self.word: Any = None
@@ -89,11 +71,14 @@ class UnicodeMathConverter:
     def convert(self, unicode_math):
         self.document.Content.Text = ""
         paragraph = self.document.Paragraphs(1).Range
-        paragraph.Text = word_linear_format(unicode_math.strip())
+        paragraph.Text = unicode_math.strip()
         self.document.OMaths.Add(paragraph)
-        self.document.OMaths.BuildUp()
+        equation = self.document.OMaths.Item(1)
+        equation.Range.Select()
+        self.word.CommandBars.ExecuteMso("EquationUnicodeFormat")
+        self.word.CommandBars.ExecuteMso("EquationConvert")
 
-        package_xml = self.document.OMaths.Item(1).Range.WordOpenXML
+        package_xml = equation.Range.WordOpenXML
         package = etree.fromstring(package_xml.encode("utf-8"))
         math_paragraph = package.find(f".//{{{MATH_NS}}}oMathPara")
         if math_paragraph is None:

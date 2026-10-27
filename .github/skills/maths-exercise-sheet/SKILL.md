@@ -14,8 +14,8 @@ Use the current assistant's LLM to compose exercises from the user's description
 - Extract the topic, exercise count, difficulty progression, group counts or proportions, example equations, title, output paths, and any preferred column count from the request.
 - Treat an explicit breakdown such as `5/5/5/5` as group counts when it sums to the requested total. Otherwise treat it as relative weights, allocate whole exercises by largest remainder, and break ties in the specified group order.
 - Preserve the requested order, with easier exercises first within each group. Do not shuffle groups or distribute them across CSV columns.
-- If the user requests a different page layout, honor it with the generator's `-c` / `--columns` option, defaulting to 3 columns when no value is supplied.
 - Unless the user explicitly specifies a variable or variable set, randomly choose the unknown independently for each exercise from `a,b,c,d,k,m,n,t,v,z,x,y`. Repeated letters are allowed. A letter appearing only in an example equation does not override this default.
+- Do not read existing CSV files unless explicitly requested by the user.
 - Use a short topic-based title if none is supplied. Use a descriptive CSV basename in the current workspace and a matching .docx basename unless specified otherwise. Never overwrite user files without permission; choose a new basename if needed.
 - Save the original user prompt as a Markdown file next to the CSV using the same basename and a `.md` extension, for example `exercise_name.csv` and `exercise_name.md` in the same folder. Keep the prompt verbatim or in a clean markdown summary while preserving the exact user request.
 - Ask a concise question if the exercise count is missing, requirements conflict, or the target unknown is ambiguous. Do not ask for information that can be inferred from the supplied example.
@@ -25,8 +25,6 @@ Use the current assistant's LLM to compose exercises from the user's description
 ## UnicodeMath tips
 - use `·` for multiplication instead of `*`
 - use `,` as the decimal separator if needed
-- write arithmetic directly in UnicodeMath form, for example `1+a=5`, `x/4=5`, `(-2)^3`, and `a^{-2}`
-- keep expressions simple and unambiguous; do not wrap them in `$...$`, `\(...\)` when saving CSV cells
 
 ## CSV Contract
 
